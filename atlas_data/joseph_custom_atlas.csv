@@ -1,0 +1,13 @@
+region_name,mask_path
+hippocampus_and_amygdala,atlas_data/harvoxf_hippocampus_amygdala.nii.gz
+cerebral_cortex,atlas_data/harvoxf_cerebral_cortex.nii.gz
+subcortex,atlas_data/harvoxf_subcortex.nii.gz
+basal_ganglia,atlas_data/harvoxf_basal_ganglia.nii.gz
+brainstem,atlas_data/harvoxf_brainstem.nii.gz
+thalamus,atlas_data/harvoxf_thalamus.nii.gz
+cerebellum,atlas_data/mni_Cerebellum.nii.gz
+frontal_lobe,atlas_data/mni_Frontal_Lobe.nii.gz
+parietal_lobe,atlas_data/mni_Parietal_Lobe.nii.gz
+insular_lobe,atlas_data/mni_Insular_Lobe.nii.gz
+occipital_lobe,atlas_data/mni_Occipital_Lobe.nii.gz
+temporal_lobe,atlas_data/mni_Temporal_Lobe.nii.gz
