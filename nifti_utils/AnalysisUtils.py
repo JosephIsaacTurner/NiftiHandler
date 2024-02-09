@@ -1,4 +1,4 @@
-from .NiftiHandlerCustom import NiftiHandlerDjangoS3 as nh
+from .NiftiHandler import NiftiHandler as nh
 import seaborn as sns
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -19,11 +19,13 @@ import matplotlib.patches as patches
 from matplotlib import transforms
 import numpy as np
 from tqdm.auto import tqdm
-from dotenv import load_dotenv
 import pandas as pd
 import nibabel as nib
-load_dotenv() 
 tqdm.pandas()
+from joblib import dump
+import os
+
+current_dir = os.path.dirname(__file__)
     
 class ImageComparison:
     """A class for comparing two NIfTI images. Can compute Pearson correlation and Dice coefficient."""
@@ -160,7 +162,7 @@ class ImageComparison:
 
         return description, summary_df
 
-    def anova_and_tukey(self, df):
+    def anova_and_tukey(self, df, label="symptom"):
         """
         Performs statistical analysis (ANOVA and Tukey's HSD test) on the given DataFrame.
 
@@ -170,7 +172,7 @@ class ImageComparison:
         Returns:
         Tuple: A description string and a pd.DataFrame with statistical analysis results.
         """
-        anova_results = ols('z_value ~ C(symptom)', data=df).fit()
+        anova_results = ols(f'z_value ~ C({label})', data=df).fit()
         anova_table = sm.stats.anova_lm(anova_results, typ=2)
         p_value = anova_table['PR(>F)'].iloc[0]
         if p_value >= 0.05:
@@ -178,18 +180,18 @@ class ImageComparison:
             description = f"ANOVA (p={p_value:.3f}) found no significant differences among symptom correlations."
 
             # Create a DataFrame with the same structure as from Tukey's HSD test
-            mean_corr = df.groupby('symptom')['correlation'].mean().sort_values(ascending=False)
+            mean_corr = df.groupby(label)['correlation'].mean().sort_values(ascending=False)
             summary_df = pd.DataFrame({
-                "symptom": mean_corr.index,
+                label: mean_corr.index,
                 "mean_correlation(r)": mean_corr.values,
-                "symptoms_with_significant_differences": [[] for _ in range(len(mean_corr))],
+                f"{label}s_with_significant_differences": [[] for _ in range(len(mean_corr))],
                 "percentage_of_comparisons_that_are_significant": [None] * len(mean_corr)
             })
 
             return description, summary_df
 
-        tukey_results = pairwise_tukeyhsd(df['z_value'], df['symptom'])
-        description = f"""ANOVA (p={p_value}) followed by Tukey's HSD test found significant differences among symptom correlations."""
+        tukey_results = pairwise_tukeyhsd(df['z_value'], df[label])
+        description = f"""ANOVA (p={p_value}) followed by Tukey's HSD test found significant differences among {label} correlations."""
 
         return description, self.process_tukey_results(df, tukey_results)
 
@@ -250,8 +252,8 @@ class ImageComparison:
 
 class GroupAnalysis:
 
-    def __init__(self, data):
-        
+    def __init__(self, data, label="symptom"):
+        self.label = label
         if type(data) != pd.DataFrame:
             if type(data) != list:
                 raise TypeError("Data must be a list of dictionaries.")
@@ -275,14 +277,14 @@ class GroupAnalysis:
         self.storage.save(filename, file_content)
         return filename
     
-    def mask_and_flatten(self, nd_array, mask_filepath="MNI152_T1_2mm_brain_mask.nii.gz"):
+    def mask_and_flatten(self, nd_array, mask_filepath=f"{current_dir}/MNI152_T1_2mm_brain_mask.nii.gz"):
         """Applies an anatomical mask to a 3D array in voxel space"""
         if nd_array is None:
             raise ValueError("Array must be provided.")
         
         mask = nib.load(mask_filepath).get_fdata()
         if nd_array.shape != mask.shape:
-            raise ValueError("Array and mask must have the same shape.")
+            raise ValueError(f"Array and mask must have the same shape. Got {nd_array.shape} and {mask.shape} respectively.")
         # Apply the mask and flatten the array
         nd_array = nd_array[mask == 1].flatten()
         return nd_array
@@ -293,17 +295,17 @@ class GroupAnalysis:
     def specificity_analysis(self):
         pass
     
-    def mlogit_loocr(self):
+    def mlogit_loocv(self):
         df = self.df.copy()
-        pca_df, explained_variance = self.pca(n_components=6, df=df)
+        pca_df, explained_variance = self.pca(n_components=8, df=df)
         print(f"Explained variance: {explained_variance}")
 
         # Initialize LeaveOneOut
         loo = LeaveOneOut()
 
         # Prepare dataset
-        X = pca_df.drop('symptom', axis=1)
-        y = pca_df['symptom']
+        X = pca_df.drop(self.label, axis=1)
+        y = pca_df[self.label]
 
         # List to store results
         results = []
@@ -328,13 +330,13 @@ class GroupAnalysis:
                 'Accuracy': accuracy,
                 'Confusion Matrix': conf_matrix,
                 'Classification Report': class_report,
-                'Actual Symptom': y_test.iloc[0],
-                'Predicted Symptom': y_pred[0]
+                f'Actual {self.label}': y_test.iloc[0],
+                f'Predicted {self.label}': y_pred[0]
             })
 
         # Create DataFrame from results
         results_df = pd.concat([pd.DataFrame([r]) for r in results], ignore_index=True)
-        accuracy_summary = results_df[['Accuracy', 'Actual Symptom']].copy().groupby('Actual Symptom').mean()
+        accuracy_summary = results_df[[f'Accuracy', f'Actual {self.label}']].copy().groupby(f'Actual {self.label}').mean()
 
         return results_df, accuracy_summary
 
@@ -344,8 +346,8 @@ class GroupAnalysis:
         print(f"Explained variance: {explained_variance}")
         
         # Separating features and target variable
-        X = pca_df.drop('symptom', axis=1)
-        y = pca_df['symptom']
+        X = pca_df.drop(self.label, axis=1)
+        y = pca_df[self.label]
 
         # Splitting the dataset into training and testing sets
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
@@ -362,6 +364,32 @@ class GroupAnalysis:
 
         # Return the trained model
         return model
+    
+    def mlogit_full_data(self):
+        df = self.df.copy()
+        pca_df, explained_variance, pca = self.pca(n_components=8, df=df, return_pca=True)  # Adjust PCA function to return PCA object
+        print(f"Explained variance: {explained_variance}")
+        
+        # Separating features and target variable
+        X = pca_df.drop(self.label, axis=1)
+        y = pca_df[self.label]
+
+        # Creating and training the logistic regression model on the entire dataset
+        model = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000) # Adjusted max_iter if convergence issues
+        model.fit(X, y)
+
+        # Optionally, if you want to evaluate the model internally, you could still predict and evaluate
+        # But since you mentioned you've done LOOCV already, you might skip this.
+        # If you choose to evaluate:
+        y_pred = model.predict(X)
+        print("Accuracy (on training data):", accuracy_score(y, y_pred))
+        print("Confusion Matrix (on training data):\n", confusion_matrix(y, y_pred))
+        print("Classification Report (on training data):\n", classification_report(y, y_pred))
+
+        # Save the model and PCA components
+        self.save_components(model, pca)
+        # Return the trained model on the entire dataset
+        return model
 
     def lda_loocv(self):
         df = self.df.copy()
@@ -370,7 +398,7 @@ class GroupAnalysis:
         print("data is loaded and normalized")
         flattened_arrays = df['image'].apply(self.mask_and_flatten)
         data_matrix = np.vstack(flattened_arrays)
-        class_labels = df['symptom'].values
+        class_labels = df[self.label].values
 
         loo = LeaveOneOut()
         accuracies = []
@@ -389,8 +417,8 @@ class GroupAnalysis:
             print("accuracy: {}, class: {}".format(accuracy, y_test[0]))
             accuracies.append(accuracy)
             row = {
-                'Actual Symptom': y_test[0],
-                'Predicted Symptom': y_pred[0],
+                f'Actual {self.label}': y_test[0],
+                f'Predicted {self.label}': y_pred[0],
                 'Accuracy': accuracy,
                 'Classification Report': classification_report(y_test, y_pred, output_dict=True)
             }
@@ -401,14 +429,14 @@ class GroupAnalysis:
         return accuracies, results_df 
     
     def lda(self):
-        def unflatten_to_volumetric(coefficients, mask_filepath="MNI152_T1_2mm_brain_mask.nii.gz"):
+        def unflatten_to_volumetric(coefficients, mask_filepath=f"{current_dir}/MNI152_T1_2mm_brain_mask.nii.gz"):
             mask = nib.load(mask_filepath).get_fdata()
             volumetric_image = np.zeros(mask.shape)
             volumetric_image[mask == 1] = coefficients
             return volumetric_image
 
         df = self.df.copy()
-        df['image'] = df['path'].apply(lambda x: nh.load(x).normalize_to_quantile().data)  # Assuming NiftiHandler(x).data returns the 3D array
+        df[self.label] = df['path'].apply(lambda x: nh.load(x).normalize_to_quantile().data)  # Assuming NiftiHandler(x).data returns the 3D array
         # Extract and flatten the 3D arrays
         # Instead of list comprehension, let's use pandas apply
         flattened_arrays = df['image'].apply(self.mask_and_flatten)
@@ -416,7 +444,7 @@ class GroupAnalysis:
         data_matrix = np.vstack(flattened_arrays)
 
         # Extract class labels (symptoms)
-        class_labels = df['symptom'].values
+        class_labels = df[self.label].values
 
         # Apply LDA
         lda = LDA(n_components=2)  # Assuming we want 2 components
@@ -432,11 +460,25 @@ class GroupAnalysis:
 
         # Combine LDA results with symptoms for analysis
         lda_df = pd.DataFrame(transformed_data, columns=['LD1', 'LD2'])
-        lda_df['symptom'] = class_labels
+        lda_df[self.label] = class_labels
         
         return lda_df, eigenvalues, volumetric_weights    
     
-    def pca(self, n_components=2, df=None):
+    def save_components(self, model, pca, model_path='model.joblib', pca_path='pca.joblib'):
+        """
+        Saves the logistic regression model and PCA object to disk.
+
+        :param model: Trained logistic regression model.
+        :param pca: Trained PCA object.
+        :param model_path: Path to save the logistic regression model.
+        :param pca_path: Path to save the PCA object.
+        """
+        dump(model, model_path)
+        dump(pca, pca_path)
+        print(f"Model saved to {model_path}")
+        print(f"PCA saved to {pca_path}")
+
+    def pca(self, n_components=2, df=None, return_pca=False):
         if df is None:
             df = self.df.copy()
         df['image'] = df['path'].apply(lambda x: nh.load(x).normalize_to_quantile().data)  # Assuming NiftiHandler(x).data returns the 3D array
@@ -457,8 +499,10 @@ class GroupAnalysis:
 
         # Combine PCA results with symptoms for analysis
         pca_df = pd.DataFrame(transformed_data, columns=column_names)
-        pca_df['symptom'] = df['symptom'].values
+        pca_df[self.label] = df[self.label].values
         
+        if return_pca:
+            return pca_df, explained_variance, pca
         return pca_df, explained_variance
 
     def cross_correlation_analysis(self):
@@ -507,7 +551,7 @@ class GroupAnalysis:
 
         # Group by symptom pairs and calculate the mean correlation
         symptom_correlation_df['correlation'] = pd.to_numeric(symptom_correlation_df['correlation'], errors='coerce')
-        grouped_symptom_corr = symptom_correlation_df.groupby(['symptom1', 'symptom2'])['correlation'].apply(mean_confidence_interval_correlation).reset_index()
+        grouped_symptom_corr = symptom_correlation_df.groupby([f'{self.label}1', f'{self.label}2'])['correlation'].apply(mean_confidence_interval_correlation).reset_index()
         grouped_symptom_corr[['mean_correlation', 'lower_95_CI', 'upper_95_CI']] = pd.DataFrame(grouped_symptom_corr['correlation'].tolist(), index=grouped_symptom_corr.index)
         grouped_symptom_corr.drop(columns=['correlation'], inplace=True)
 
@@ -537,8 +581,8 @@ class GroupAnalysis:
         map_to_original = dict(zip(renamed_index, df['path']))
         symptom_corr_flat['path1'] = symptom_corr_flat['id1'].map(map_to_original)
         symptom_corr_flat['path2'] = symptom_corr_flat['id2'].map(map_to_original)
-        symptom_corr_flat['symptom1'] = symptom_corr_flat['path1'].map(df.set_index('path')['symptom'])
-        symptom_corr_flat['symptom2'] = symptom_corr_flat['path2'].map(df.set_index('path')['symptom'])
+        symptom_corr_flat[f'{self.label}1'] = symptom_corr_flat['path1'].map(df.set_index('path')[self.label])
+        symptom_corr_flat[f'{self.label}2'] = symptom_corr_flat['path2'].map(df.set_index('path')[self.label])
 
         # Drop unnecessary columns and rows where correlation is 1
         symptom_corr_flat.drop(columns=['id1', 'id2'], inplace=True)
@@ -583,7 +627,7 @@ class GroupAnalysis:
         def process_row(row, data_dict):
             print("working on row {} of {}".format(row.name + 1, len(data_dict)))
             original_image_map = row['path']
-            actual_symptom = row['symptom']
+            actual_symptom = row[self.label]
             comparer = ImageComparison()
 
             # Exclude the current row for comparison
@@ -595,7 +639,7 @@ class GroupAnalysis:
             
             p_value = float(description.split('=')[1].split(')')[0].strip())
             percentage_of_comparisons_that_are_significant = df_corr['percentage_of_comparisons_that_are_significant'].iloc[0]
-            symptoms_with_significant_differences = df_corr['symptoms_with_significant_differences'].iloc[0]
+            symptoms_with_significant_differences = df_corr[f'{self.label}s_with_significant_differences'].iloc[0]
             # print(symptoms_with_significant_differences)
             if symptoms_with_significant_differences:
                 p_value_against_next_best_symptoms = max(symptoms_with_significant_differences.values())
@@ -603,25 +647,25 @@ class GroupAnalysis:
                 p_value_against_next_best_symptoms = None
 
             # Ensure df_corr has at least one row and contains 'symptom' column
-            if not df_corr.empty and 'symptom' in df_corr.columns:
-                predicted_symptom = df_corr['symptom'].iloc[0]
+            if not df_corr.empty and self.label in df_corr.columns:
+                predicted_symptom = df_corr[self.label].iloc[0]
                 correct_prediction = actual_symptom == predicted_symptom
-                print(f"Actual symptom: {actual_symptom}, predicted symptom: {predicted_symptom}")
+                print(f"Actual {self.label}: {actual_symptom}, predicted {self.label}: {predicted_symptom}")
             else:
                 predicted_symptom = None
                 correct_prediction = False
-                print(f"Actual symptom: {actual_symptom}, predicted symptom: Not Available")
+                print(f"Actual {self.label}: {actual_symptom}, predicted {self.label}: Not Available")
 
             # Summarize results
             row = {
                 'description': description,
-                'actual_symptom': actual_symptom,
-                'predicted_symptom': predicted_symptom,
+                f'actual_{self.label}': actual_symptom,
+                f'predicted_{self.label}': predicted_symptom,
                 'correct_prediction': correct_prediction,
                 'p_value': p_value,
                 'percentage_of_comparisons_that_are_significant': percentage_of_comparisons_that_are_significant,
-                'symptoms_with_significant_differences': symptoms_with_significant_differences,
-                'p_value_against_next_best_symptoms': p_value_against_next_best_symptoms
+                f'{self.label}s_with_significant_differences': symptoms_with_significant_differences,
+                f'p_value_against_next_best_{self.label}s': p_value_against_next_best_symptoms
             }
             return row
         

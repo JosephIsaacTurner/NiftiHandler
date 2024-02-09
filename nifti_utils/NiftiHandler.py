@@ -1,5 +1,6 @@
 from scipy.stats import rankdata
 from scipy.ndimage import zoom
+from joblib import load
 import nibabel as nib
 import numpy as np
 import os
@@ -7,8 +8,6 @@ import pandas as pd
 
 # Get the directory in which the current script is located
 current_dir = os.path.dirname(__file__)
-parent_dir = os.path.dirname(current_dir)
-atlases_dir = os.path.join(parent_dir, 'atlas_data')
 
 class NiftiHandler:
     """
@@ -183,6 +182,18 @@ class NiftiHandler:
         for attr in attributes_to_copy:
             setattr(self, attr, getattr(other, attr))
 
+    def flatten_along_last_axis(self):
+        # Check if the last dimension of the shape is 1
+        if self.shape[-1] == 1:
+            # Remove the last dimension from data
+            self.data = np.squeeze(self.data, axis=-1)
+            # Update shape
+            self.shape = self.data.shape
+            # Rebuild or update nifti_obj (assuming nibabel is used)
+            self.nifti_obj = nib.Nifti1Image(self.data, self.affine)
+
+        return self
+
     def _populate_data_from_nifti(self, nifti_obj):
         """Populate properties from a NIfTI image object."""
         self.nifti_obj = nifti_obj  # Store the NIfTI object
@@ -190,6 +201,10 @@ class NiftiHandler:
         self.affine = nifti_obj.affine
         self.shape = nifti_obj.shape
         
+        # Flatten shape if the last dimension is 1
+        if self.shape[-1] == 1:
+            self.flatten_along_last_axis()
+            
         # Determine resolution based on shape
         if self.shape == (182, 218, 182):
             self.resolution = '1mm'
@@ -197,7 +212,7 @@ class NiftiHandler:
             self.resolution = '2mm'
         else:
             self.resolution = "unknown"
-            print(f"Unknown resolution. Expected (182, 218, 182) or (91, 109, 91). Got {self.shape}")
+            print(f"Unknown resolution. Expected (182, 218, 182) or (91, 109, 91), but got {self.shape}")
 
         # Determine the type of data (mask or continuous)
         self.type = self._determine_data_type(self.data)
@@ -482,15 +497,18 @@ class NiftiHandler:
         
         mask = nib.load(mask_filepath).get_fdata()
         if nd_array.shape != mask.shape:
-            print("Array and mask must have the same shape.")
+            print(f"Array and mask must have the same shape. Got {nd_array.shape} and {mask.shape}.")
             self.resample()
+            nd_array = self.data
+            if nd_array.shape != mask.shape:
+                raise ValueError(f"Array and mask must have the same shape. Got {nd_array.shape} and {mask.shape}.")
         nd_array[mask == 0] = np.nan
         nd_array[mask == 1] = np.nan_to_num(nd_array[mask == 1], nan=0, posinf=0, neginf=0)
         self.mask_applied = True
         self.data = nd_array
         return self
     
-    def mask_and_flatten(self, nd_array, mask_filepath="MNI152_T1_2mm_brain_mask.nii.gz"):
+    def mask_and_flatten(self, nd_array=None, mask_filepath="MNI152_T1_2mm_brain_mask.nii.gz"):
         """Applies an anatomical mask to a 3D array in voxel space"""
         if nd_array is None:
             nd_array = self.data
@@ -577,6 +595,21 @@ class NiftiHandler:
         elif resolution == '1mm':
             self.nifti_obj = nib.Nifti1Image(data, self.one_mm_affine)
             return nib.Nifti1Image(data, self.one_mm_affine)
+
+    def load_components(self, model_path='model.joblib', pca_path='pca.joblib'):
+        model = load(model_path)
+        pca = load(pca_path)
+        return model, pca
+
+    def predict_new_sample(self):
+        self.normalize_to_quantile()
+        data = self.mask_and_flatten()
+        model, pca = self.load_components()
+        
+        new_data_pca = pca.transform(data)
+
+        prediction = model.predict(new_data_pca)
+        return prediction
 
     """Classes for better interoperability with the nibabel library"""
     def get_fdata(self):

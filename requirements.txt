@@ -2,6 +2,10 @@ tqdm
 pandas
 nibabel
 numpy
-jupyter
-ipywidgets
+ipykernel
 pyarrow
+scipy
+scikit-learn
+statsmodels
+matplotlib
+seaborn
