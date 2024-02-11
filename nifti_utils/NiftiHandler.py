@@ -5,9 +5,12 @@ import nibabel as nib
 import numpy as np
 import os
 import pandas as pd
+import warnings
 
 # Get the directory in which the current script is located
 current_dir = os.path.dirname(__file__)
+parent_dir = os.path.dirname(current_dir)
+atlases_dir = os.path.join(parent_dir, 'atlas_data')
 
 class NiftiHandler:
     """
@@ -508,7 +511,7 @@ class NiftiHandler:
         self.data = nd_array
         return self
     
-    def mask_and_flatten(self, nd_array=None, mask_filepath="MNI152_T1_2mm_brain_mask.nii.gz"):
+    def mask_and_flatten(self, nd_array=None, mask_filepath=f"{current_dir}/MNI152_T1_2mm_brain_mask.nii.gz"):
         """Applies an anatomical mask to a 3D array in voxel space"""
         if nd_array is None:
             nd_array = self.data
@@ -596,20 +599,42 @@ class NiftiHandler:
             self.nifti_obj = nib.Nifti1Image(data, self.one_mm_affine)
             return nib.Nifti1Image(data, self.one_mm_affine)
 
-    def load_components(self, model_path='model.joblib', pca_path='pca.joblib'):
+    def load_components(self, model_path=f'{current_dir}/model.joblib', pca_path=f'{current_dir}/pca.joblib'):
         model = load(model_path)
         pca = load(pca_path)
         return model, pca
 
-    def predict_new_sample(self):
+    def predict(self):
         self.normalize_to_quantile()
         data = self.mask_and_flatten()
         model, pca = self.load_components()
         
-        new_data_pca = pca.transform(data)
+        new_data_pca = pca.transform([data])
 
-        prediction = model.predict(new_data_pca)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="X does not have valid feature names")
+            prediction = model.predict(new_data_pca)
         return prediction
+
+    def predict_with_confidence(self):
+        self.normalize_to_quantile()
+        data = self.mask_and_flatten()
+        model, pca = self.load_components()
+        
+        new_data_pca = pca.transform([data])
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="X does not have valid feature names")
+            # Get the predicted probabilities for each class
+            probabilities = model.predict_proba(new_data_pca)[0]  # [0] to get the probabilities for the sample
+
+        # Pair each class label with its corresponding probability
+        class_probabilities = list(zip(model.classes_, probabilities))
+
+        # Sort the classes based on the probability in descending order
+        ranked_predictions = sorted(class_probabilities, key=lambda x: x[1], reverse=True)
+        
+        return ranked_predictions
 
     """Classes for better interoperability with the nibabel library"""
     def get_fdata(self):
