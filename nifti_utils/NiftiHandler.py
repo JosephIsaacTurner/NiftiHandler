@@ -1,11 +1,12 @@
 from scipy.stats import rankdata
-from scipy.ndimage import zoom
+from scipy.ndimage import zoom, measurements
 from joblib import load
 import nibabel as nib
 import numpy as np
 import os
 import pandas as pd
 import warnings
+from .AnatomicalLabeler import Atlas, MultiAtlasLabeler
 
 # Get the directory in which the current script is located
 current_dir = os.path.dirname(__file__)
@@ -636,6 +637,99 @@ class NiftiHandler:
         
         return ranked_predictions
 
+    def world_to_voxel_space(self, world_coordinates, affine=None):
+        if affine is None:
+            affine = self.affine
+        """
+        Converts world space coordinates to voxel space using the inverse of the affine matrix.
+        
+        Parameters:
+        - world_coordinates: The coordinates in world space to be converted (3-element sequence or Nx3 array).
+        - affine: The affine transformation matrix used to map voxel space to world space (4x4 array).
+        
+        Returns:
+        - voxel_coordinates: The equivalent coordinates in voxel space.
+        """
+        # Calculate the inverse of the affine matrix
+        inverse_affine = np.linalg.inv(affine)
+        # Apply the inverse affine transformation to convert world coordinates to voxel space
+        voxel_coordinates = nib.affines.apply_affine(inverse_affine, world_coordinates)
+        return tuple(np.rint(voxel_coordinates).astype(int))
+
+    def voxel_to_world_space(self, voxel_coordinates, affine=None):
+        """
+        Converts voxel space coordinates to world space using the affine matrix.
+        
+        Parameters:
+        - voxel_coordinates: The coordinates in voxel space to be converted (3-element sequence or Nx3 array).
+        - affine: The affine transformation matrix used to map voxel space to world space (4x4 array).
+        
+        Returns:
+        - world_coordinates: The equivalent coordinates in world space.
+        """
+        if affine is None:
+            affine = self.affine
+        # Apply the affine transformation to convert voxel coordinates to world space
+        world_coordinates = nib.affines.apply_affine(affine, voxel_coordinates)
+        return tuple(np.rint(world_coordinates).astype(int))
+    
+    @property
+    def center_of_mass(self, data=None):
+        if data is None:
+            data = self.data
+        data = np.nan_to_num(self.data)  # Replace NaNs with 0s
+        return measurements.center_of_mass(data)
+    
+    @property
+    def center_of_mass_world_space(self, data=None):
+        if data is None:
+            data = self.data
+        return self.voxel_to_world_space(self.center_of_mass, affine=self.affine)
+
+    @property
+    def peak_coordinate_voxel_space(self):
+        """Returns the peak coordinate in voxel space"""
+        # return np.unravel_index(np.argmax(self.data, axis=None), self.data.shape)
+        return np.unravel_index(np.nanargmax(self.data, axis=None), self.data.shape)
+    
+    @property
+    def peak_coordinate_world_space(self):
+        """Returns the peak coordinate in world space"""
+        peak_voxel = self.peak_coordinate_voxel_space
+        return self.voxel_to_world_space(peak_voxel)
+    
+    @property
+    def peak_value(self):
+        """Returns the peak value"""
+        return np.nanmax(self.data)
+
+    @property
+    def anatomical_name_at_peak(self):
+        """Returns the anatomical name at the peak coordinate"""
+        index = self.peak_coordinate_voxel_space
+        atlas_cort_name = [Atlas(os.path.join(atlases_dir, "HarvardOxford-cort-maxprob-thr0-2mm.nii.gz")).name_at_index(index)]
+        atlas_sub_name = [Atlas(os.path.join(atlases_dir, "HarvardOxford-sub-maxprob-thr0-2mm.nii.gz")).name_at_index(index)]
+        results = [x for x in list(set(atlas_cort_name + atlas_sub_name)) if x != 'No matching region found']
+        if len(results) == 0:
+            return "No matching region found"
+        elif len(results) == 1:
+            return results[0]
+        return results
+    
+    @property
+    def anatomical_name_at_center_of_mass(self):
+        """Returns the anatomical name at the center of mass"""
+        index = self.center_of_mass
+        index = tuple(map(int, index))
+        atlas_cort_name = [Atlas(os.path.join(atlases_dir, "HarvardOxford-cort-maxprob-thr0-2mm.nii.gz")).name_at_index(index)]
+        atlas_sub_name = [Atlas(os.path.join(atlases_dir, "HarvardOxford-sub-maxprob-thr0-2mm.nii.gz")).name_at_index(index)]
+        results = [x for x in list(set(atlas_cort_name + atlas_sub_name)) if x != 'No matching region found']
+        if len(results) == 0:
+            return "No matching region found"
+        elif len(results) == 1:
+            return results[0]
+        return results
+    
     """Classes for better interoperability with the nibabel library"""
     def get_fdata(self):
         return self.data

@@ -1,0 +1,22 @@
+value,x,y,z,name
+1,58,37,50,Left Cerebral White Matter
+2,70,63,35,Left Cerebral Cortex
+3,57,40,41,Left Lateral Ventrical
+4,51,51,39,Left Thalamus
+5,51,71,38,Left Caudate
+6,56,67,34,Left Putamen
+7,54,62,35,Left Pallidum
+8,44,49,18,Brainstem
+9,59,54,27,Left Hippocampus
+10,57,61,27,Left Amygdala
+11,50,70,33,Left Accumbens
+12,29,38,51,Right Cerebral White Matter
+13,25,42,61,Right Cerebral Cortex
+14,35,45,44,Right Lateral Ventricle
+15,38,51,39,Right Thalamus
+16,39,72,37,Right Caudate
+17,34,68,34,Right Putamen
+18,35,61,35,Right Pallidum
+19,31,57,25,Right Hippocampus
+20,32,63,25,Right Amygdala
+21,40,69,32,Right Accumbens
