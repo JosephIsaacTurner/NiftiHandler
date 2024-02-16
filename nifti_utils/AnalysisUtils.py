@@ -77,7 +77,8 @@ class ImageComparison:
         """Computes the Pearson correlation between one image and a list of images, returning a DataFrame."""
         # Initialize a list to hold each row's data
         results_list = []
-        for image2 in list_of_images:
+        # Wrap list_of_images with tqdm for a progress bar
+        for image2 in tqdm(list_of_images, desc="Correlating images"):
             try:
                 # Compute the correlation
                 correlation = self.correlate_images(image1, image2)

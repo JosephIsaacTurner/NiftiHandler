@@ -1,5 +1,6 @@
 from scipy.stats import rankdata
 from scipy.ndimage import zoom, measurements
+from scipy import ndimage as ndi
 from joblib import load
 import nibabel as nib
 import numpy as np
@@ -122,7 +123,6 @@ class NiftiHandler:
         self.twod_data = self.df_xyz = self.df_voxel_id = None
         self.id = self.type = None
         self.mask_applied = self.is_quantile_normalized = False
-        self.nifti_obj = None
 
     def _handle_input_data(self, data):
         """Decide the appropriate method to handle the input data based on its type."""
@@ -180,8 +180,7 @@ class NiftiHandler:
         """Copy properties from another NiftiHandler instance, including the nifti_obj."""
         attributes_to_copy = [
             'data', 'affine', 'shape', 'resolution', 'twod_data', 'df_xyz', 
-            'df_voxel_id', 'id', 'type', 'mask_applied', 'is_quantile_normalized',
-            'nifti_obj'  # Include nifti_obj in the list of attributes to copy
+            'df_voxel_id', 'id', 'type', 'mask_applied', 'is_quantile_normalized'
         ]
         for attr in attributes_to_copy:
             setattr(self, attr, getattr(other, attr))
@@ -193,14 +192,11 @@ class NiftiHandler:
             self.data = np.squeeze(self.data, axis=-1)
             # Update shape
             self.shape = self.data.shape
-            # Rebuild or update nifti_obj (assuming nibabel is used)
-            self.nifti_obj = nib.Nifti1Image(self.data, self.affine)
 
         return self
 
     def _populate_data_from_nifti(self, nifti_obj):
         """Populate properties from a NIfTI image object."""
-        self.nifti_obj = nifti_obj  # Store the NIfTI object
         self.data = nifti_obj.get_fdata()
         self.affine = nifti_obj.affine
         self.shape = nifti_obj.shape
@@ -594,10 +590,8 @@ class NiftiHandler:
         if data is None:
             data = self.data
         if resolution == '2mm':
-            self.nifti_obj = nib.Nifti1Image(data, self.two_mm_affine)
             return nib.Nifti1Image(data, self.two_mm_affine)
         elif resolution == '1mm':
-            self.nifti_obj = nib.Nifti1Image(data, self.one_mm_affine)
             return nib.Nifti1Image(data, self.one_mm_affine)
 
     def load_components(self, model_path=f'{current_dir}/model.joblib', pca_path=f'{current_dir}/pca.joblib'):
@@ -673,6 +667,82 @@ class NiftiHandler:
         world_coordinates = nib.affines.apply_affine(affine, voxel_coordinates)
         return tuple(np.rint(world_coordinates).astype(int))
     
+    def local_maxima_3D(self, data=None, order=10):
+        """Detects local maxima in a 3D array
+
+        Parameters
+        ---------
+        data : 3d ndarray
+        order : int
+            How many points on each side to use for the comparison
+
+        Returns
+        -------
+        coords : ndarray
+            coordinates of the local maxima
+        values : ndarray
+            values of the local maxima
+        """
+        if data is None:
+            data = self.data
+        size = 1 + 2 * order
+        footprint = np.ones((size, size, size))
+        footprint[order, order, order] = 0
+
+        filtered = ndi.maximum_filter(data, footprint=footprint)
+        mask_local_maxima = data > filtered
+        coords = np.asarray(np.where(mask_local_maxima)).T
+        values = data[mask_local_maxima]
+
+        df = pd.DataFrame(coords, columns=['x', 'y', 'z'])
+        df['value'] = values
+        df.sort_values(by='value', inplace=True, ascending=False)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    def local_minima_3D(self, data=None, order=10):
+        """Detects local minima in a 3D array
+
+        Parameters
+        ---------
+        data : 3d ndarray
+        order : int
+            How many points on each side to use for the comparison
+
+        Returns
+        -------
+        coords : ndarray
+            coordinates of the local minima
+        values : ndarray
+            values of the local minima
+        """
+        if data is None:
+            data = self.data
+        size = 1 + 2 * order
+        footprint = np.ones((size, size, size))
+        footprint[order, order, order] = 0
+
+        filtered = ndi.minimum_filter(data, footprint=footprint)
+        mask_local_minima = data < filtered
+        coords = np.asarray(np.where(mask_local_minima)).T
+        values = data[mask_local_minima]
+
+        df = pd.DataFrame(coords, columns=['x', 'y', 'z'])
+        df['value'] = values
+        df.sort_values(by='value', inplace=True, ascending=False) # How can I also reset the index to reflect the new order?
+
+        df.reset_index(drop=True, inplace=True)
+
+        return df
+
+    def get_local_extrema(self, order=10, data=None):
+        if data is None:
+            data = self.data
+        df_max = self.local_maxima_3D(data=data, order=order)
+        df_min = self.local_minima_3D(data=data, order=order)
+        df = pd.concat([df_max, df_min], axis=0, ignore_index=True)
+        return df
+
     @property
     def center_of_mass(self, data=None):
         if data is None:
@@ -729,6 +799,15 @@ class NiftiHandler:
         elif len(results) == 1:
             return results[0]
         return results
+    
+    @property
+    def nifti_obj(self):
+        if self.resolution == '2mm':
+            self.nifti_obj = nib.Nifti1Image(self.data, self.two_mm_affine)
+            return nib.Nifti1Image(self.data, self.two_mm_affine)
+        elif self.resolution == '1mm':
+            self.nifti_obj = nib.Nifti1Image(self.data, self.one_mm_affine)
+            return nib.Nifti1Image(self.data, self.one_mm_affine)
     
     """Classes for better interoperability with the nibabel library"""
     def get_fdata(self):
