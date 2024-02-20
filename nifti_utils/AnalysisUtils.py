@@ -154,7 +154,7 @@ class ImageComparison:
         original_image.normalize_to_quantile()
 
         # Calculate correlations and z-values
-        df['correlation'] = df['path'].apply(lambda x: self.correlate_images(original_image, NiftiHandler(x)))
+        df['correlation'] = df['path'].apply(lambda x: self.correlate_images(original_image, nh(x)))
         df['z_value'] = np.arctanh(df['correlation'])
 
         # Perform ANOVA and Tukey's HSD test if significant
