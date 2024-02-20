@@ -1,3 +1,9 @@
+takotsubo.csv
+grafman.csv
+regression_map.nii.gz
+precom_t_medulla_seed.nii.gz
+regression_results.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

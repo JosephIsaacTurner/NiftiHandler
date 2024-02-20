@@ -1,12 +1,15 @@
-from scipy.stats import rankdata
-from scipy.ndimage import zoom, measurements
-from scipy import ndimage as ndi
-from joblib import load
-import nibabel as nib
-import numpy as np
 import os
-import pandas as pd
 import warnings
+import copy
+
+import numpy as np
+import pandas as pd
+import nibabel as nib
+from joblib import load
+from scipy import ndimage as ndi
+from scipy.ndimage import zoom, measurements
+from scipy.stats import rankdata
+
 from .AnatomicalLabeler import Atlas, MultiAtlasLabeler
 
 # Get the directory in which the current script is located
@@ -14,6 +17,95 @@ current_dir = os.path.dirname(__file__)
 parent_dir = os.path.dirname(current_dir)
 atlases_dir = os.path.join(parent_dir, 'atlas_data')
 
+class Coordinate2mm:
+    def __init__(self, coord=None, coord_space='voxel'):
+        """
+        Initialize the Coordinate2mm object with a coordinate and coordinate space.
+        
+        Parameters:
+        - coord: A 3-element sequence representing the coordinate. Default is (0, 0, 0) if None is provided.
+        - coord_space: The space of the coordinate provided ('voxel' or 'mni'). Default is 'voxel'.
+        """
+        self.coord = self._validate_and_convert_coord(coord)
+        self.coord_space = coord_space
+        self.affine = np.array([
+            [-2., 0., 0., 90.],
+            [0., 2., 0., -126.],
+            [0., 0., 2., -72.],
+            [0., 0., 0., 1.]
+        ])
+    
+    def _validate_and_convert_coord(self, coord):
+        """Validate and convert the input coordinate to a tuple if necessary."""
+        if coord is None:
+            return (0, 0, 0)
+        elif isinstance(coord, (list, np.ndarray)) and len(coord) == 3:
+            return tuple(int(x) for x in coord)
+        elif isinstance(coord, tuple) and len(coord) == 3:
+            return tuple(int(x) for x in coord)
+        else:
+            raise ValueError("Coordinate must be a 3-element sequence.")
+    
+    @property
+    def mni_space_coord(self):
+        """Converts and returns the coordinate in MNI space."""
+        if self.coord_space == 'mni':
+            return self.coord
+        else:
+            return self.voxel_to_mni_space(self.coord)
+
+    @property
+    def voxel_space_coord(self):
+        """Converts and returns the coordinate in voxel space."""
+        if self.coord_space == 'voxel':
+            return self.coord
+        else:
+            return self.mni_to_voxel_space(self.coord)
+    
+    @property
+    def anatomical_name(self):
+        """Returns the anatomical name at the peak coordinate"""
+        index = self.voxel_space_coord
+        atlas_cort_name = [Atlas(os.path.join(atlases_dir, "HarvardOxford-cort-maxprob-thr0-2mm.nii.gz")).name_at_index(index)]
+        atlas_sub_name = [Atlas(os.path.join(atlases_dir, "HarvardOxford-sub-maxprob-thr0-2mm.nii.gz")).name_at_index(index)]
+        results = [x for x in list(set(atlas_cort_name + atlas_sub_name)) if x != 'No matching region found']
+        if len(results) == 0:
+            return "No matching region found"
+        elif len(results) == 1:
+            return results[0]
+        return results
+
+    def mni_to_voxel_space(self, world_coord=None):
+        """
+        Converts MNI space coordinates to voxel space using the inverse of the affine matrix.
+        
+        Parameters:
+        - world_coord: The coordinates in MNI space to be converted (3-element sequence).
+        
+        Returns:
+        - voxel_coordinates: The equivalent coordinates in voxel space as a tuple.
+        """
+        if world_coord is None:
+            world_coord = self.coord
+        inverse_affine = np.linalg.inv(self.affine)
+        voxel_coordinates = nib.affines.apply_affine(inverse_affine, world_coord)
+        return tuple(np.rint(voxel_coordinates).astype(int))
+
+    def voxel_to_mni_space(self, voxel_coord=None):
+        """
+        Converts voxel space coordinates to MNI space using the affine matrix.
+        
+        Parameters:
+        - voxel_coord: The coordinates in voxel space to be converted (3-element sequence).
+        
+        Returns:
+        - mni_coordinates: The equivalent coordinates in MNI space as a tuple.
+        """
+        if voxel_coord is None:
+            voxel_coord = self.coord
+        world_coordinates = nib.affines.apply_affine(self.affine, voxel_coord)
+        return tuple(np.rint(world_coordinates).astype(int))
+    
 class NiftiHandler:
     """
     A versatile class designed to handle NIfTI images, capable of being initialized with various data types. 
@@ -161,7 +253,7 @@ class NiftiHandler:
         if array.ndim == 2 and array.shape[1] == 4:
             self._populate_data_from_2d_array(array)
         elif array.shape in [(182, 218, 182), (91, 109, 91)]:
-            resolution = '1mm' if array.shape == (182, 218, 182) else '2mm'
+            resolution = 'one_mm' if array.shape == (182, 218, 182) else 'two_mm'
             nifti_obj = nib.Nifti1Image(array, getattr(self, f"{resolution}_affine"))
             self._populate_data_from_nifti(nifti_obj)
         else:
@@ -502,7 +594,7 @@ class NiftiHandler:
             nd_array = self.data
             if nd_array.shape != mask.shape:
                 raise ValueError(f"Array and mask must have the same shape. Got {nd_array.shape} and {mask.shape}.")
-        nd_array[mask == 0] = np.nan
+        nd_array[mask == 0] = 0
         nd_array[mask == 1] = np.nan_to_num(nd_array[mask == 1], nan=0, posinf=0, neginf=0)
         self.mask_applied = True
         self.data = nd_array
@@ -742,6 +834,9 @@ class NiftiHandler:
         df_min = self.local_minima_3D(data=data, order=order)
         df = pd.concat([df_max, df_min], axis=0, ignore_index=True)
         return df
+    
+    def copy(self):
+        return copy.deepcopy(self)
 
     @property
     def center_of_mass(self, data=None):
@@ -799,16 +894,14 @@ class NiftiHandler:
         elif len(results) == 1:
             return results[0]
         return results
-    
+        
     @property
     def nifti_obj(self):
         if self.resolution == '2mm':
-            self.nifti_obj = nib.Nifti1Image(self.data, self.two_mm_affine)
             return nib.Nifti1Image(self.data, self.two_mm_affine)
         elif self.resolution == '1mm':
-            self.nifti_obj = nib.Nifti1Image(self.data, self.one_mm_affine)
             return nib.Nifti1Image(self.data, self.one_mm_affine)
-    
+  
     """Classes for better interoperability with the nibabel library"""
     def get_fdata(self):
         return self.data

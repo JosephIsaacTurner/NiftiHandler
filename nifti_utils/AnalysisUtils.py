@@ -1,29 +1,27 @@
+import os
+import itertools
+import numpy as np
+import pandas as pd
+from scipy import stats
+import nibabel as nib
+from tqdm import tqdm
+tqdm.pandas()
+
 from .NiftiHandler import NiftiHandler as nh
-import seaborn as sns
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+
 import statsmodels.api as sm
-import statsmodels.stats.multitest as mt
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import itertools
-from scipy import stats
+
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import LeaveOneOut
+from sklearn.model_selection import LeaveOneOut, train_test_split
 from sklearn.cluster import KMeans
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
-import matplotlib.patches as patches
-from matplotlib import transforms
-import numpy as np
-from tqdm.auto import tqdm
-import pandas as pd
-import nibabel as nib
-tqdm.pandas()
+
 from joblib import dump
-import os
+
 
 current_dir = os.path.dirname(__file__)
     
@@ -73,11 +71,12 @@ class ImageComparison:
         
         return correlation
 
-    def correlate_image_with_list_as_df(self, image1, list_of_images):
+    def correlate_image_with_list_as_df(self, image1, image_list):
         """Computes the Pearson correlation between one image and a list of images, returning a DataFrame."""
         # Initialize a list to hold each row's data
         results_list = []
         # Wrap list_of_images with tqdm for a progress bar
+        list_of_images = image_list.copy()
         for image2 in tqdm(list_of_images, desc="Correlating images"):
             try:
                 # Compute the correlation
